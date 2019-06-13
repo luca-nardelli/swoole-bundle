@@ -53,3 +53,4 @@ services:
         tags: [ { name: console.command, command: 'swoole:server:profile' } ]
         arguments:
             $serverConfigurator: '@swoole_bundle.server.http_server.configurator.for_server_profile_command'
+
