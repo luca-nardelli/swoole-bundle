@@ -183,6 +183,7 @@ final class EventCallbacks
 
         // Event "onStart" has been deprecated by swoole team
         if (ServerConfig::RUNNING_MODE_REACTOR === $serverRunningMode) {
+            // TODO: warning?
             unset($events[self::EVENT_SERVER_START]);
         }
 

@@ -136,6 +136,8 @@ final class ServerTestCommand extends Command
             $this->serverEventCallbacks->registerServerStartHandler($this->sigIntHandler);
         }
 
+//        dd($this->serverEventCallbacks);
+
         $lifecycleEvents = [
             EventCallbacks::EVENT_SERVER_START,
             EventCallbacks::EVENT_SERVER_SHUTDOWN,

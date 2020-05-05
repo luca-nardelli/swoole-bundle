@@ -12,9 +12,9 @@ use K911\Swoole\Bridge\Symfony\HttpFoundation\RequestFactoryInterface;
 use K911\Swoole\Bridge\Symfony\HttpFoundation\Session\SetSessionCookieEventListener;
 use K911\Swoole\Bridge\Symfony\HttpFoundation\TrustAllProxiesRequestHandler;
 use K911\Swoole\Bridge\Symfony\HttpKernel\DebugHttpKernelRequestHandler;
-use K911\Swoole\Bridge\Symfony\HttpKernel\HttpKernelRequestHandler;
 use K911\Swoole\Bridge\Symfony\Messenger\SwooleServerTaskTransportFactory;
 use K911\Swoole\Bridge\Symfony\Messenger\SwooleServerTaskTransportHandler;
+use K911\Swoole\Server\Config\EventCallbacks;
 use K911\Swoole\Server\Config\Socket;
 use K911\Swoole\Server\Config\Sockets;
 use K911\Swoole\Server\Configurator\ConfiguratorInterface;
@@ -31,6 +31,7 @@ use K911\Swoole\Server\Runtime\HMR\InotifyHMR;
 use K911\Swoole\Server\ServerInterface;
 use K911\Swoole\Server\ServerProxy;
 use K911\Swoole\Server\TaskHandler\TaskHandlerInterface;
+use K911\Swoole\Server\TestDumpingHandler;
 use K911\Swoole\Server\WorkerHandler\HMRWorkerStartHandler;
 use K911\Swoole\Server\WorkerHandler\WorkerStartHandlerInterface;
 use Symfony\Component\Config\FileLocator;
@@ -45,12 +46,28 @@ use Symfony\Component\Messenger\Transport\TransportFactoryInterface;
 
 final class SwooleExtension extends Extension implements PrependExtensionInterface
 {
-    private $predefinedParents = [
-        'http' => [
-            'class' => HttpKernelRequestHandler::class,
-            'definition' => [], // symfony DI service definition changes
-            'config' => [], // swoole bundle item config changes on child (listener/handler)
-        ],
+    private const SWOOLE_BUNDLE_CONFIG_TO_SWOOLE_SERVER_EVENTS = [
+        'server_start' => EventCallbacks::EVENT_SERVER_START,
+        'server_shutdown' => EventCallbacks::EVENT_SERVER_SHUTDOWN,
+        'manager_start' => EventCallbacks::EVENT_MANAGER_START,
+        'manager_stop' => EventCallbacks::EVENT_MANAGER_STOP,
+        'worker_start' => EventCallbacks::EVENT_WORKER_START,
+        'worker_stop' => EventCallbacks::EVENT_WORKER_STOP,
+        'worker_exit' => EventCallbacks::EVENT_WORKER_EXIT,
+        'worker_error' => EventCallbacks::EVENT_WORKER_ERROR,
+        'task' => EventCallbacks::EVENT_TASK,
+        'task_finish' => EventCallbacks::EVENT_TASK_FINISH,
+        'pipe_message' => EventCallbacks::EVENT_PIPE_MESSAGE,
+        'before_reload' => EventCallbacks::EVENT_BEFORE_RELOAD,
+        'after_reload' => EventCallbacks::EVENT_AFTER_RELOAD,
+        'connect' => EventCallbacks::EVENT_CONNECT,
+        'receive' => EventCallbacks::EVENT_RECEIVE,
+        'close' => EventCallbacks::EVENT_CLOSE,
+        'packet' => EventCallbacks::EVENT_PACKET,
+        'http_request' => EventCallbacks::EVENT_HTTP_REQUEST,
+        'websocket_handshake' => EventCallbacks::EVENT_WEBSOCKET_HANDSHAKE,
+        'websocket_open' => EventCallbacks::EVENT_WEBSOCKET_OPEN,
+        'websocket_message' => EventCallbacks::EVENT_WEBSOCKET_MESSAGE,
     ];
 
     /**
@@ -441,13 +458,18 @@ final class SwooleExtension extends Extension implements PrependExtensionInterfa
     {
         $serverDefinition = $this->registerServerService($container);
 
+        $listenerTemplates = $server['templates']['listeners'];
+        $handlerTemplates = $server['templates']['handlers'];
+
         $serverConfig = $server['config'];
 
         $mainSocketDefinition = $container->getDefinition('swoole_bundle.server.main_socket');
         $this->configureSocketDefinition($mainSocketDefinition, $server);
 
         $listenersDefinition = $container->getDefinition('swoole_bundle.server.listeners');
-        $callbacksDefinition = $container->getDefinition('swoole_bundle.server.callbacks');
+        $handlersDefinition = $container->getDefinition('swoole_bundle.server.callbacks');
+
+        $this->configureEventCallbacks($handlersDefinition, $container, $handlerTemplates, $server['handlers']);
 
         $serverConfigDefinition = $container->getDefinition('swoole_bundle.server.config');
 
@@ -457,55 +479,123 @@ final class SwooleExtension extends Extension implements PrependExtensionInterfa
         ]);
     }
 
-    private function resolveParent(array $child, array $predefinedParents): ?array
+    private function configureEventCallbacks(Definition $eventCallbacks, ContainerBuilder $container, array $handlerTemplates, array $handlersMap): void
     {
-        if (!empty($child['parent'])) {
-            Assertion::keyExists($predefinedParents, $child['parent']);
-
-            return $predefinedParents[$child['parent']];
-        }
-
-        return null;
-    }
-
-    private function resolveDefinition(string $id, ?string $class, ContainerBuilder $container): Definition
-    {
-        if ($container->hasDefinition($id)) {
-            $definition = $container->getDefinition($id);
-            if (null !== $class) {
-                Assertion::same($definition->getClass(), $class);
+        foreach ($handlersMap as $eventName => $handlers) {
+            foreach ($this->prepareDefinitions($handlers, $container, 'swoole_bundle.server.handlers', $handlerTemplates) as $definitionConfig) {
+                /**
+                 * @var string     $id
+                 * @var Definition $definition
+                 * @var array      $config
+                 */
+                [
+                    $id,
+                    $definition,
+                    $config,
+                ] = $definitionConfig;
+                $this->configureHandler($eventName, $definition, $config);
+                $eventCallbacks->addMethodCall('register', [
+                    self::SWOOLE_BUNDLE_CONFIG_TO_SWOOLE_SERVER_EVENTS[$eventName],
+                    [new Reference($id), 'handle'],
+                    $config['priority'],
+                ]);
             }
-
-            return $definition;
         }
-
-        Assertion::notEmpty($class);
-        Assertion::classExists($class);
-
-        return $container->register($id, $class);
     }
 
-    private function prepareDefinitions(array $children, ContainerBuilder $container, string $idPrefix = 'swoole_bundle.server.listeners.listener', array $predefinedParents = []): \Generator
+    private function configureHandler(string $eventName, Definition $handler, array $config): void
+    {
+        switch ($handler->getClass()) {
+            case TestDumpingHandler::class:
+                $handler->addMethodCall('setText', [$eventName]);
+                // no break
+            default:
+                // noop
+        }
+    }
+
+    private function filterDefinitionId(string $definitionId): string
+    {
+        if (0 === \mb_strpos($definitionId, '@')) {
+            return \mb_substr($definitionId, 1, \mb_strlen($definitionId));
+        }
+
+        return $definitionId;
+    }
+
+    private function copyDefinition(ContainerBuilder $container, string $definitionId, string $newDefinitionId): Definition
+    {
+        return $container->setDefinition($newDefinitionId,
+            $container->getDefinition($definitionId)
+        );
+    }
+
+    private function prepareDefinitionWithParent(array $definition, array $parent, ContainerBuilder $container, string $idPrefix, int $counter): array
+    {
+        $id = \sprintf('service_%d', $counter);
+        $parentName = $definition['parent'];
+        if (!empty($definition['id'])) {
+            $id = $this->filterDefinitionId($definition['id']);
+            Assertion::false($container->has($id), \sprintf('Service "%s" cannot be used in service group "%s" when parent "%s" is defined', $id, $idPrefix, $parentName));
+        }
+
+        $id = \sprintf('%s.%s', $idPrefix, $id);
+        Assertion::false($container->has($id), \sprintf('Service ID "%s" cannot be used in service group "%s" with parent "%s", because ID has been already registered in container', $id, $idPrefix, $parentName));
+
+        $templateId = $this->filterDefinitionId($parent['id']);
+        Assertion::true($container->has($templateId), \sprintf('Service template "%s" has defined invalid template service ID "%s", because it does not exist in container', $parentName, $templateId));
+        $serviceDefinition = $this->copyDefinition($container, $templateId, $id);
+
+        return [$id, $serviceDefinition, $definition];
+    }
+
+    private function prepareLoneDefinition(array $definition, ContainerBuilder $container): array
+    {
+        Assertion::notEmptyKey($definition, 'id');
+        $id = $this->filterDefinitionId($definition['id']);
+        $serviceDefinition = $container->getDefinition($id);
+
+        return [$id, $serviceDefinition, $definition];
+    }
+
+    private function prepareDefinitions(array $children, ContainerBuilder $container, string $idPrefix = 'swoole_bundle.server.listeners', array $predefinedParents = []): \Generator
     {
         $generatedIdCounter = 0;
         foreach ($children as $child) {
-            $definitionId = $child['id'] ?? \sprintf('%s_%d', $idPrefix, ++$generatedIdCounter);
-            $parent = $this->resolveParent($child, $predefinedParents);
-            $definition = $this->resolveDefinition($definitionId, $parent['class'] ?? null, $container);
-
-            if (!empty($parent['definition'])) {
-                $definition->setChanges($parent['definition']);
-            }
-
-            if (!empty($parent['config'])) {
-                $child = \array_merge($parent, $child);
+            if (!empty($child['parent'])) {
+                ++$generatedIdCounter;
+                Assertion::notEmptyKey($predefinedParents, $child['parent'], \sprintf('Template "%%s" could not be found for service group "%s"', $idPrefix));
+                yield $this->prepareDefinitionWithParent($child, $predefinedParents[$child['parent']], $container, $idPrefix, $generatedIdCounter);
+            } else {
+                yield $this->prepareLoneDefinition($child, $container);
             }
         }
+    }
+
+    private function deepRecursiveNotEmptyMerge(array $base, array $override): array
+    {
+        $result = $base;
+
+        foreach ($override as $key => $value) {
+            if (empty($value)) {
+                continue;
+            }
+
+            if (\is_array($value)) {
+                $result[$key] = isset($base[$key]) && \is_array($base[$key]) ? $this->deepRecursiveNotEmptyMerge($base[$key], $value) : $value;
+
+                continue;
+            }
+
+            $result[$key] = $value;
+        }
+
+        return $result;
     }
 
     private function proxyManagerInstalled(): bool
     {
         // If symfony/proxy-manager-bridge is installed this class exists
-        return \class_exists(\Symfony\Bridge\ProxyManager\LazyProxy\Instantiator\RuntimeInstantiator::class);
+        return \class_exists('\Symfony\Bridge\ProxyManager\LazyProxy\Instantiator\RuntimeInstantiator');
     }
 }

@@ -50,7 +50,6 @@ final class Configuration implements ConfigurationInterface
     private function addServerSocketConfigChild(NodeBuilder $builder): void
     {
         $builder->arrayNode('socket')
-            ->addDefaultsIfNotSet()
             ->children()
                 ->scalarNode('host')
                     ->cannotBeEmpty()
@@ -70,32 +69,80 @@ final class Configuration implements ConfigurationInterface
         ;
     }
 
+    private function addServerHandlerConfigChildrenPrototype(NodeBuilder $builder): void
+    {
+        $builder->scalarNode('id')
+            ->defaultNull()
+        ->end()
+        ->scalarNode('priority')
+            ->defaultValue(100)
+        ->end()
+        ->arrayNode('config')
+            ->ignoreExtraKeys(false)
+            ->children()
+            ->end()
+        ->end()
+        ;
+    }
+
     private function addServerHandlerConfigChildren(string $eventName, NodeBuilder $builder): void
     {
-        $builder->arrayNode($eventName)
+        $prototypeChildren = $builder->arrayNode($eventName)
             ->arrayPrototype()
-                ->addDefaultsIfNotSet()
                 ->beforeNormalization()
                     ->ifString()
                     ->then(function ($v): array {
-                        return [
-                            'id' => (string) $v,
-                            'parent' => (string) $v,
-                            'args' => [],
-                        ];
+                        $str = (string) $v;
+                        if (0 === \mb_strpos($str, '@')) {
+                            return ['id' => $str];
+                        }
+
+                        return ['parent' => $str];
                     })
                 ->end()
                 ->children()
-                    ->scalarNode('id')
-                        ->defaultNull()
-                    ->end()
                     ->scalarNode('parent')
                         ->defaultNull()
                     ->end()
-                    ->arrayNode('args')
+        ;
+
+        $this->addServerHandlerConfigChildrenPrototype($prototypeChildren);
+
+        $prototypeChildren
+                ->end()
+            ->end()
+        ->end()
+        ;
+    }
+
+    private function addServerTemplatesConfig(NodeBuilder $builder): void
+    {
+        $listenersChildrenPrototype = $builder->arrayNode('templates')
+            ->addDefaultsIfNotSet()
+            ->children()
+                ->arrayNode('listeners')
+                    ->useAttributeAsKey('name')
+                    ->arrayPrototype()
                         ->addDefaultsIfNotSet()
-                        ->ignoreExtraKeys(false)
                         ->children()
+        ;
+
+        $this->addServerListenerConfigChildren($listenersChildrenPrototype, false);
+
+        $handlersChildrenPrototype = $listenersChildrenPrototype
+                        ->end()
+                    ->end()
+                ->end()
+                ->arrayNode('handlers')
+                    ->useAttributeAsKey('name')
+                    ->arrayPrototype()
+                        ->addDefaultsIfNotSet()
+                        ->children()
+        ;
+
+        $this->addServerHandlerConfigChildrenPrototype($handlersChildrenPrototype);
+
+        $handlersChildrenPrototype
                         ->end()
                     ->end()
                 ->end()
@@ -111,13 +158,9 @@ final class Configuration implements ConfigurationInterface
         $builder->scalarNode('id')
             ->defaultNull()
         ->end()
-        ->scalarNode('parent')
-            ->defaultValue($listener ? null : 'http')
-        ->end()
         ;
 
         $builder->arrayNode('websocket')
-            ->addDefaultsIfNotSet()
             ->canBeEnabled()
             ->children()
             ->end()
@@ -125,7 +168,6 @@ final class Configuration implements ConfigurationInterface
         ;
 
         $builder->arrayNode('http')
-            ->addDefaultsIfNotSet()
             ->canBeEnabled()
             ->children()
                 ->booleanNode('http2')
@@ -137,11 +179,9 @@ final class Configuration implements ConfigurationInterface
 
         $builder->arrayNode('encryption')
             ->ignoreExtraKeys(false)
-            ->addDefaultsIfNotSet()
             ->canBeEnabled()
             ->children()
                 ->arrayNode('certificate_authority')
-                    ->addDefaultsIfNotSet()
                     ->children()
                         ->scalarNode('file')
                             ->defaultNull()
@@ -152,13 +192,11 @@ final class Configuration implements ConfigurationInterface
                     ->end()
                 ->end()
                 ->arrayNode('server_certificate')
-                    ->addDefaultsIfNotSet()
                     ->children()
                         ->scalarNode('file')
                             ->defaultNull()
                         ->end()
                         ->arrayNode('key')
-                            ->addDefaultsIfNotSet()
                             ->children()
                                 ->scalarNode('file')
                                     ->defaultNull()
@@ -171,7 +209,6 @@ final class Configuration implements ConfigurationInterface
                     ->end()
                 ->end()
                 ->arrayNode('client_certificate')
-                    ->addDefaultsIfNotSet()
                     ->children()
                         ->scalarNode('file')
                             ->defaultNull()
@@ -180,7 +217,6 @@ final class Configuration implements ConfigurationInterface
                             ->defaultFalse()
                         ->end()
                         ->arrayNode('verify')
-                            ->addDefaultsIfNotSet()
                             ->canBeEnabled()
                             ->children()
                                 ->scalarNode('depth')
@@ -198,7 +234,6 @@ final class Configuration implements ConfigurationInterface
         ;
 
         $builder->arrayNode('config')
-            ->addDefaultsIfNotSet()
             ->ignoreExtraKeys(false)
             ->children()
             ->end()
@@ -246,7 +281,6 @@ final class Configuration implements ConfigurationInterface
     private function addServerConfigChild(NodeBuilder $builder): void
     {
         $serverChildren = $builder->arrayNode('server')
-            ->addDefaultsIfNotSet()
             ->children()
         ;
 
@@ -257,13 +291,24 @@ final class Configuration implements ConfigurationInterface
         ->end()
         ;
 
+        $this->addServerTemplatesConfig($serverChildren);
+
         $this->addServerSocketConfigChild($serverChildren);
+
+        $serverChildren->scalarNode('parent')
+            ->defaultValue('http')
+        ->end()
+        ;
+
         $this->addServerListenerConfigChildren($serverChildren, false);
 
         $listenersChildren = $serverChildren->arrayNode('listeners')
             ->ignoreExtraKeys(false)
             ->arrayPrototype()
                 ->children()
+                    ->scalarNode('parent')
+                        ->defaultValue(null)
+                    ->end()
         ;
 
         $this->addServerListenerConfigChildren($listenersChildren, true);

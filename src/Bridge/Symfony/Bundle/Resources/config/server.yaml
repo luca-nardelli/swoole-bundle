@@ -44,3 +44,27 @@ services:
             $serverConfig: '@swoole_bundle.server.config'
             $serverListeners: '@swoole_bundle.server.listeners'
             $serverEventCallbacks: '@swoole_bundle.server.callbacks'
+
+    # predefined
+    swoole_bundle.server.templates.handlers.sig_int_handler:
+        class: K911\Swoole\Server\LifecycleHandler\SigIntHandler
+
+    swoole_bundle.server.templates.handlers.api_server_http_handler:
+        class: K911\Swoole\Server\Api\ApiServerRequestHandler
+        autoconfigure: true
+        autowire: true
+
+    swoole_bundle.server.templates.handlers.test_1:
+        class: K911\Swoole\Server\TestDumpingHandler
+        arguments:
+            - 'test_1'
+
+    swoole_bundle.server.templates.handlers.test_2:
+        class: K911\Swoole\Server\TestDumpingHandler
+        arguments:
+            - 'test_1'
+
+    swoole_bundle.server.templates.handlers.test_3:
+        class: K911\Swoole\Server\TestDumpingHandler
+        arguments:
+            - 'test_1'

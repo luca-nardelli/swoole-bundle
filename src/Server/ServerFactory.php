@@ -35,7 +35,7 @@ final class ServerFactory implements ServerFactoryInterface
     /**
      * @throws \Assert\AssertionFailedException
      */
-    public function make(): Server
+    public function make(): ServerInterface
     {
         $serverType = $this->inferredType();
         $serverClass = self::SERVER_CLASS_BY_TYPE[$serverType];
@@ -121,7 +121,7 @@ final class ServerFactory implements ServerFactoryInterface
             $port->set($listener->config()->all());
             foreach ($listener->eventsCallbacks()->get($serverType, $runningMode, true) as $eventName => $callback) {
                 Assertion::isCallable($callback, \sprintf('Callback for event "%s" is not a callable. Actual type: %s', $eventName, \gettype($callback)));
-                $swooleServer->on($eventName, $callback);
+                $port->on($eventName, $callback);
             }
         }
     }
