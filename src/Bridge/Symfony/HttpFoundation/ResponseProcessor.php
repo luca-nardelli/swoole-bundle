@@ -17,9 +17,9 @@ final class ResponseProcessor implements ResponseProcessorInterface
      */
     public function process(HttpFoundationResponse $httpFoundationResponse, SwooleResponse $swooleResponse): void
     {
-        if ($httpFoundationResponse instanceof StreamedResponse) {
-            throw new RuntimeException('HttpFoundation "StreamedResponse" response object is not yet supported');
-        }
+//        if ($httpFoundationResponse instanceof StreamedResponse) {
+//            throw new RuntimeException('HttpFoundation "StreamedResponse" response object is not yet supported');
+//        }
 
         foreach ($httpFoundationResponse->headers->allPreserveCaseWithoutCookies() as $name => $values) {
             $swooleResponse->header($name, \implode(', ', $values));
@@ -42,6 +42,14 @@ final class ResponseProcessor implements ResponseProcessorInterface
 
         if ($httpFoundationResponse instanceof BinaryFileResponse) {
             $swooleResponse->sendfile($httpFoundationResponse->getFile()->getRealPath());
+        } elseif ($httpFoundationResponse instanceof StreamedResponse) {
+            // Workaround to access the callback directly
+            $refClass = new \ReflectionClass($httpFoundationResponse);
+            $prop = $refClass->getProperty('callback');
+            $prop->setAccessible(true);
+            $cb = $prop->getValue($httpFoundationResponse);
+            $cb($swooleResponse);
+            $swooleResponse->end();
         } else {
             $swooleResponse->end($httpFoundationResponse->getContent());
         }
